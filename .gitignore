@@ -1,0 +1,36 @@
+# Python-specific files
+__pycache__/
+*.pyc
+*.pyd
+*.egg-info
+
+# Virtual environment
+.venv/
+venv/
+env/
+virtualenv/
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# IDE-specific files
+.idea/  # PyCharm
+.vscode/ # VS Code
+*.swp  # Vim swap files
+*~  # Backup files
+
+# Log files
+*.log
+
+# Deployment-related 
+.env  # Environment variables (NEVER commit this!)
+config.ini # Configuration files which might contain sensitive data
+
+# Temporary files
+*.tmp
+temp/
+
+# Should not be in version control
+my_secret_key.txt
+passwords.txt
