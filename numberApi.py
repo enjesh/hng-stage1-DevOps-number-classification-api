@@ -1,83 +1,114 @@
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-import requests
+from pydantic import BaseModel
+import math
+import aiohttp
 from typing import List
+import cProfile
+import pstats
 
-app = FastAPI(title="Number Classification API", description="API to classify numbers and return their properties along with a fun fact.")
+app = FastAPI()
 
-# Add CORS Middleware
+# CORS settings for production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins (change in production)
+    allow_origins=["https://yourdomain.com"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allow all HTTP methods
-    allow_headers=["*"],  # Allow all headers
+    allow_methods=["GET"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
+# Response Models
+class Resp(BaseModel):
+    number: int
+    is_prime: bool
+    is_perfect: bool
+    properties: List[str]
+    digit_sum: int
+    fun_fact: str
+
+class ErrorResp(BaseModel):
+    number: str
+    error: bool
+
+# Number checks
 def is_prime(n: int) -> bool:
-    """Check if a number is prime."""
-    if n < 2:
+    if n <= 1:
         return False
-    if n == 2:  # Optimization: 2 is the only even prime
+    if n == 2:
         return True
-    if n % 2 == 0:  # Optimization: skip even numbers
+    if n % 2 == 0:
         return False
-    for i in range(3, int(n**0.5) + 1, 2):  # Check only odd numbers up to sqrt(n)
+    sqrt_n = math.isqrt(n)
+    for i in range(3, sqrt_n + 1, 2):
         if n % i == 0:
             return False
     return True
 
 def is_perfect(n: int) -> bool:
-    """Check if a number is a perfect number."""
     if n <= 1:
         return False
-    divisors_sum = 0
-    for i in range(1, int(n**0.5) + 1):  # Only check up to sqrt(n)
+    total = 1
+    sqrt_n = math.isqrt(n)
+    for i in range(2, sqrt_n + 1):
         if n % i == 0:
-            divisors_sum += i
-            if i * i != n:  # Avoid double-counting perfect squares
-                divisors_sum += n // i
-    return divisors_sum == 2 * n  # Includes the number itself in the sum
+            total += i
+            if (other := n // i) != i:
+                total += other
+    return total == n
+
+def digit_sum(n: int) -> int:
+    total = 0
+    while n > 0:
+        total += n % 10
+        n //= 10
+    return total
 
 def is_armstrong(n: int) -> bool:
-    """Check if a number is an Armstrong number."""
-    num_str = str(n)  # Convert to string once
-    num_digits = len(num_str)  # Get length once
-    armstrong_sum = sum(int(digit)**num_digits for digit in num_str)
-    return armstrong_sum == n
+    original = n
+    num_str = str(abs(n))
+    length = len(num_str)
+    total = sum(int(digit) ** length for digit in num_str)
+    return total == original
 
-def get_fun_fact(n: int) -> str:
-    """Fetch a fun fact about the number from the Numbers API with error handling."""
+# Asynchronous fun fact retrieval
+async def get_fun_fact(n: int) -> str:
+    url = f"http://numbersapi.com/{n}/math"
     try:
-        response = requests.get(f"http://numbersapi.com/{n}/math", timeout=5)  # Add timeout
-        response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
-        return response.text.strip()
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching fun fact: {e}")  # Log error for debugging
-        return "Could not retrieve fun fact."
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=5) as response:
+                return await response.text()
+    except Exception:
+        return "No fun fact available."
 
+# API Endpoint
 @app.get("/api/classify-number")
-def classify_number(number: int = Query(..., description="The number to classify")):
-    """Classifies the number and returns its properties."""
+async def classify_number(number: str = Query(...)):
+
+    if not number.strip():
+        return JSONResponse(content=ErrorResp(number="", error=True).dict(), status_code=400)
+
     try:
-        if number < 0:  # Raise an actual HTTPException for proper handling
-            raise HTTPException(status_code=400, detail="Number must be non-negative")
+        number = int(number)
+        if number < 0:
+            return JSONResponse(content=ErrorResp(number=str(number), error=True).dict(), status_code=400)
+    except ValueError:
+        return JSONResponse(content=ErrorResp(number=number, error=True).dict(), status_code=400)
 
-        properties: List[str] = []  # Type hint for properties
+    properties = ["even" if number % 2 == 0 else "odd"]
+    if is_armstrong(number):
+        properties.append("armstrong")
 
-        if is_armstrong(number):
-            properties.append("armstrong")
+    fun_fact = await get_fun_fact(number)
+    if __name__ == "__main__":
+       uvicorn.run(app, port=8080)
 
-        properties.append("odd" if number % 2 else "even")
-
-        return {
-            "number": number,
-            "is_prime": is_prime(number),
-            "is_perfect": is_perfect(number),
-            "properties": properties,
-            "digit_sum": sum(int(digit) for digit in str(number)),
-            "fun_fact": get_fun_fact(number),
-        }
-
-    except HTTPException as e:  # Catch HTTPException
-        raise e  # FastAPI automatically handles HTTP exceptions
+    return Resp(
+        number=number,
+        is_prime=is_prime(number),
+        is_perfect=is_perfect(number),
+        properties=properties,
+        digit_sum=digit_sum(number),
+        fun_fact=fun_fact
+    )
