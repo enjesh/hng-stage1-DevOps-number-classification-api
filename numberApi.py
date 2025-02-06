@@ -1,83 +1,106 @@
-from fastapi import FastAPI, Query, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel
+import math
 import requests
+from fastapi.responses import JSONResponse
 from typing import List
 
-app = FastAPI(title="Number Classification API", description="API to classify numbers and return their properties along with a fun fact.")
+app = FastAPI()
 
-# Add CORS Middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins (change in production)
-    allow_credentials=True,
-    allow_methods=["*"],  # Allow all HTTP methods
-    allow_headers=["*"],  # Allow all headers
-)
+class Resp(BaseModel):
+    number: int
+    is_prime: bool
+    is_perfect: bool
+    properties: List[str]
+    digit_sum: int
+    fun_fact: str
+
+class ErrorResp(BaseModel):
+    number: str
+    error: bool
 
 def is_prime(n: int) -> bool:
-    """Check if a number is prime."""
-    if n < 2:
+    if n <= 1:
         return False
-    if n == 2:  # Optimization: 2 is the only even prime
+    if n == 2:
         return True
-    if n % 2 == 0:  # Optimization: skip even numbers
+    if n % 2 == 0:
         return False
-    for i in range(3, int(n**0.5) + 1, 2):  # Check only odd numbers up to sqrt(n)
+    sqrt_n = int(math.isqrt(n))
+    for i in range(3, sqrt_n + 1, 2):
         if n % i == 0:
             return False
     return True
 
 def is_perfect(n: int) -> bool:
-    """Check if a number is a perfect number."""
     if n <= 1:
         return False
-    divisors_sum = 0
-    for i in range(1, int(n**0.5) + 1):  # Only check up to sqrt(n)
+    total = 1
+    sqrt_n = math.isqrt(n)
+    for i in range(2, sqrt_n + 1):
         if n % i == 0:
-            divisors_sum += i
-            if i * i != n:  # Avoid double-counting perfect squares
-                divisors_sum += n // i
-    return divisors_sum == 2 * n  # Includes the number itself in the sum
+            total += i
+            if (other := n // i) != i:
+                total += other
+    return total == n
+
+def digit_sum(n: int) -> int:
+    n = abs(n)
+    total = 0
+    while n > 0:
+        total += n % 10
+        n //= 10
+    return total
 
 def is_armstrong(n: int) -> bool:
-    """Check if a number is an Armstrong number."""
-    num_str = str(n)  # Convert to string once
-    num_digits = len(num_str)  # Get length once
-    armstrong_sum = sum(int(digit)**num_digits for digit in num_str)
-    return armstrong_sum == n
-
-def get_fun_fact(n: int) -> str:
-    """Fetch a fun fact about the number from the Numbers API with error handling."""
-    try:
-        response = requests.get(f"http://numbersapi.com/{n}/math", timeout=5)  # Add timeout
-        response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
-        return response.text.strip()
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching fun fact: {e}")  # Log error for debugging
-        return "Could not retrieve fun fact."
+    original = n
+    n = abs(n)
+    num_str = str(n)
+    length = len(num_str)
+    total = 0
+    temp = n
+    
+    while temp > 0:
+        digit = temp % 10
+        total += digit ** length
+        temp //= 10
+    
+    return total == original
 
 @app.get("/api/classify-number")
-def classify_number(number: int = Query(..., description="The number to classify")):
-    """Classifies the number and returns its properties."""
+async def classify_number(number: str = Query(default="")):
+    if not number.strip():
+        return JSONResponse(
+            content=ErrorResp(number="", error=True).dict(),
+            status_code=400
+        )
+
     try:
-        if number < 0:  # Raise an actual HTTPException for proper handling
-            raise HTTPException(status_code=400, detail="Number must be non-negative")
+        n = int(number)
+    except ValueError:
+        return JSONResponse(
+            content=ErrorResp(number=number, error=True).dict(),
+            status_code=400
+        )
 
-        properties: List[str] = []  # Type hint for properties
+    # Fetch fun fact with error handling
+    try:
+        response = requests.get(f"http://numbersapi.com/{n}/math", timeout=5)
+        response.raise_for_status()
+        fun_fact = response.text
+    except requests.exceptions.RequestException:
+        fun_fact = "No fun fact available."
 
-        if is_armstrong(number):
-            properties.append("armstrong")
+    # Determine properties
+    properties = ["even" if n % 2 == 0 else "odd"]
+    if is_armstrong(n):
+        properties.append("armstrong")
 
-        properties.append("odd" if number % 2 else "even")
-
-        return {
-            "number": number,
-            "is_prime": is_prime(number),
-            "is_perfect": is_perfect(number),
-            "properties": properties,
-            "digit_sum": sum(int(digit) for digit in str(number)),
-            "fun_fact": get_fun_fact(number),
-        }
-
-    except HTTPException as e:  # Catch HTTPException
-        raise e  # FastAPI automatically handles HTTP exceptions
+    return Resp(
+        number=n,
+        is_prime=is_prime(n),
+        is_perfect=is_perfect(n),
+        properties=properties,
+        digit_sum=digit_sum(n),
+        fun_fact=fun_fact
+    )
